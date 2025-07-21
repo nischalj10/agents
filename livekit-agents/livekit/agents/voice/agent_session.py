@@ -33,6 +33,12 @@ from ..types import (
     APIConnectOptions,
     NotGivenOr,
 )
+
+if TYPE_CHECKING:
+    try:
+        from livekit.plugins.openai import MultimodalLLM
+    except ImportError:
+        MultimodalLLM = None
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent
@@ -357,6 +363,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @property
     def agent_state(self) -> AgentState:
         return self._agent_state
+
+    @property
+    def is_multimodal_llm(self) -> bool:
+        """Check if the current LLM supports multimodal input"""
+        try:
+            from livekit.plugins.openai import MultimodalLLM
+
+            return isinstance(self._llm, MultimodalLLM) and self._llm.enable_multimodal
+        except ImportError:
+            return False
+
+    @property
+    def multimodal_llm(self) -> MultimodalLLM | None:
+        """Get the multimodal LLM if available"""
+        try:
+            from livekit.plugins.openai import MultimodalLLM
+
+            return self._llm if isinstance(self._llm, MultimodalLLM) else None
+        except ImportError:
+            return None
 
     @property
     def current_agent(self) -> Agent:

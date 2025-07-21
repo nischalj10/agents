@@ -25,7 +25,7 @@ https://docs.livekit.io/agents/integrations/llm/ for more information.
 
 from . import realtime
 from .embeddings import EmbeddingData, create_embeddings
-from .llm import LLM, LLMStream
+from .llm import LLM, LLMStream, MultimodalLLM
 from .models import STTModels, TTSModels, TTSVoices
 from .stt import STT
 from .tts import TTS
@@ -36,6 +36,7 @@ __all__ = [
     "TTS",
     "LLM",
     "LLMStream",
+    "MultimodalLLM",
     "STTModels",
     "TTSModels",
     "TTSVoices",
