@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     try:
         from livekit.plugins.openai import MultimodalLLM
     except ImportError:
-        MultimodalLLM = None
+        MultimodalLLM = None  # type: ignore
 from ..utils.misc import is_given
 from . import io, room_io
 from .agent import Agent

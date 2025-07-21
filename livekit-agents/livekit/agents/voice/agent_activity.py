@@ -652,7 +652,7 @@ class AgentActivity(RecognitionHooks):
             logger.warning("push_multimodal_audio called but LLM is not multimodal")
             return
 
-        speech_handle = SpeechHandle()
+        speech_handle = SpeechHandle.create()
 
         self._create_speech_task(
             self._multimodal_reply_task(
@@ -1779,7 +1779,6 @@ class AgentActivity(RecognitionHooks):
             chat_ctx=chat_ctx,
             tool_ctx=tool_ctx,
             model_settings=model_settings,
-            llm_stream=llm_stream,
         )
         tasks.append(llm_task)
 
@@ -1797,7 +1796,7 @@ class AgentActivity(RecognitionHooks):
             )
             tasks.append(tts_task)
 
-        await speech_handle.wait_if_not_interrupted(tasks)
+        await speech_handle.wait_if_not_interrupted([asyncio.ensure_future(task) for task in tasks])
 
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*tasks)
