@@ -30,6 +30,8 @@ This README reflects the 1.0 release. For documentation on the previous 0.x rele
 
 The **Agents framework** enables you to build voice AI agents that can see, hear, and speak in realtime. It provides a fully open-source platform for creating server-side agentic applications.
 
+<!-- Dummy comment added by Devin for PR testing purposes -->
+
 <!--END_DESCRIPTION-->
 
 ## Features
