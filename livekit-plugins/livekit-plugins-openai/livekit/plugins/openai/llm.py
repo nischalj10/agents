@@ -677,48 +677,33 @@ class MultimodalLLM(LLM):
         """
         if self._enable_multimodal and is_given(audio_data):
             import base64
+            from livekit import rtc
 
             modified_ctx = chat_ctx.copy()
 
-            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+            audio_frames = []
+            audio_content = llm.AudioContent(frame=audio_frames)
 
-            if modified_ctx.messages:
-                last_message = modified_ctx.messages[-1]
-                if last_message.role == "user":
-                    if isinstance(last_message.content, str):
-                        last_message.content = [
-                            {"type": "text", "text": last_message.content},
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": audio_b64, "format": "wav"},
-                            },
-                        ]
-                    elif isinstance(last_message.content, list):
-                        last_message.content.append(
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": audio_b64, "format": "wav"},
-                            }
-                        )
+            if modified_ctx.items:
+                last_item = modified_ctx.items[-1]
+                if (
+                    last_item.type == "message"
+                    and last_item.role == "user"
+                ):
+                    if isinstance(last_item.content, str):
+                        last_item.content = [last_item.content, audio_content]
+                    elif isinstance(last_item.content, list):
+                        last_item.content.append(audio_content)
                 else:
-                    audio_message = llm.ChatMessage(
+                    modified_ctx.add_message(
                         role="user",
-                        content=[
-                            {
-                                "type": "input_audio",
-                                "input_audio": {"data": audio_b64, "format": "wav"},
-                            }
-                        ],
+                        content=[audio_content]
                     )
-                    modified_ctx.messages.append(audio_message)
             else:
-                audio_message = llm.ChatMessage(
+                modified_ctx.add_message(
                     role="user",
-                    content=[
-                        {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "wav"}}
-                    ],
+                    content=[audio_content]
                 )
-                modified_ctx.messages.append(audio_message)
 
             chat_ctx = modified_ctx
 
