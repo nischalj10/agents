@@ -473,16 +473,22 @@ class AgentActivity(RecognitionHooks):
                 logger.exception("failed to update the instructions")
 
         await self._resume_scheduling_task()
-        self._audio_recognition = AudioRecognition(
-            hooks=self,
-            stt=self._agent.stt_node if self.stt else None,
-            vad=self.vad,
-            turn_detector=self.turn_detection if not isinstance(self.turn_detection, str) else None,
-            min_endpointing_delay=self._session.options.min_endpointing_delay,
-            max_endpointing_delay=self._session.options.max_endpointing_delay,
-            turn_detection_mode=self._turn_detection_mode,
-        )
-        self._audio_recognition.start()
+
+        if not self._session.is_multimodal_llm:
+            self._audio_recognition = AudioRecognition(
+                hooks=self,
+                stt=self._agent.stt_node if self.stt else None,
+                vad=self.vad,
+                turn_detector=self.turn_detection
+                if not isinstance(self.turn_detection, str)
+                else None,
+                min_endpointing_delay=self._session.options.min_endpointing_delay,
+                max_endpointing_delay=self._session.options.max_endpointing_delay,
+                turn_detection_mode=self._turn_detection_mode,
+            )
+            self._audio_recognition.start()
+        else:
+            logger.info("Using multimodal LLM, bypassing STT pipeline")
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(self) -> None:
@@ -639,6 +645,28 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.push_video(frame)
+
+    def push_multimodal_audio(self, audio_data: bytes) -> None:
+        """Push audio data directly to multimodal LLM, bypassing STT"""
+        if not self._session.is_multimodal_llm:
+            logger.warning("push_multimodal_audio called but LLM is not multimodal")
+            return
+
+        speech_handle = SpeechHandle.create()
+
+        self._create_speech_task(
+            self._multimodal_reply_task(
+                speech_handle=speech_handle,
+                audio_data=audio_data,
+                chat_ctx=self._agent._chat_ctx.copy(),
+                tools=self.tools,
+                model_settings=ModelSettings(),
+            ),
+            speech_handle=speech_handle,
+            name="AgentActivity.multimodal_reply",
+        )
+
+        self._schedule_speech(speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
     def say(
         self,
@@ -1689,6 +1717,94 @@ class AgentActivity(RecognitionHooks):
                 for msg in tool_messages:
                     msg.created_at = reply_started_at
                 self._agent._chat_ctx.insert(tool_messages)
+
+    @utils.log_exceptions(logger=logger)
+    async def _multimodal_reply_task(
+        self,
+        *,
+        speech_handle: SpeechHandle,
+        audio_data: bytes,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        model_settings: ModelSettings,
+    ) -> None:
+        """Handle multimodal LLM reply with audio input"""
+        multimodal_llm = self._session.multimodal_llm
+        if not multimodal_llm:
+            logger.error("multimodal_reply_task called but no multimodal LLM available")
+            return
+
+        await speech_handle.wait_if_not_interrupted(
+            [asyncio.ensure_future(speech_handle._wait_for_authorization())]
+        )
+
+        if speech_handle.interrupted:
+            return
+
+        self._session._update_agent_state("thinking")
+
+        try:
+            llm_stream = multimodal_llm.chat(
+                chat_ctx=chat_ctx,
+                tools=tools,
+                audio_data=audio_data,
+                tool_choice=model_settings.tool_choice,
+            )
+
+            await self._process_multimodal_llm_stream(
+                speech_handle, llm_stream, chat_ctx, tools, model_settings
+            )
+        except Exception as e:
+            logger.exception("Error in multimodal reply task", exc_info=e)
+            if self._session.agent_state == "thinking":
+                self._session._update_agent_state("listening")
+
+    async def _process_multimodal_llm_stream(
+        self,
+        speech_handle: SpeechHandle,
+        llm_stream: llm.LLMStream,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.FunctionTool | llm.RawFunctionTool],
+        model_settings: ModelSettings,
+    ) -> None:
+        """Process the LLM stream from multimodal input using existing pipeline logic"""
+
+        audio_output = self._session.output.audio if self._session.output.audio_enabled else None
+
+        tool_ctx = llm.ToolContext(tools)
+
+        tasks: list[asyncio.Task[Any]] = []
+        llm_task, llm_gen_data = perform_llm_inference(
+            node=self._agent.llm_node,
+            chat_ctx=chat_ctx,
+            tool_ctx=tool_ctx,
+            model_settings=model_settings,
+        )
+        tasks.append(llm_task)
+
+        text_tee = utils.aio.itertools.tee(llm_gen_data.text_ch, 2)
+        tts_text_input, tr_input = text_tee
+
+        tts_task: asyncio.Task[bool] | None = None
+        tts_gen_data: _TTSGenerationData | None = None
+        if audio_output is not None:
+            await llm_gen_data.started_fut
+            tts_task, tts_gen_data = perform_tts_inference(
+                node=self._agent.tts_node,
+                input=tts_text_input,
+                model_settings=model_settings,
+            )
+            tasks.append(tts_task)
+
+        await speech_handle.wait_if_not_interrupted([asyncio.ensure_future(task) for task in tasks])
+
+        if speech_handle.interrupted:
+            await utils.aio.cancel_and_wait(*tasks)
+            await text_tee.aclose()
+            return
+
+        if self._session.agent_state == "thinking":
+            self._session._update_agent_state("speaking" if audio_output else "listening")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_reply_task(

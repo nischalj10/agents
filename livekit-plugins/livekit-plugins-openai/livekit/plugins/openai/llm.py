@@ -607,6 +607,117 @@ class LLM(llm.LLM):
         )
 
 
+class MultimodalLLM(LLM):
+    def __init__(
+        self,
+        *,
+        model: str | ChatModels = "gpt-4o-audio-preview",
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+        _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
+        service_tier: NotGivenOr[str] = NOT_GIVEN,
+        enable_multimodal: bool = True,
+    ) -> None:
+        """
+        Create a new instance of OpenAI Multimodal LLM that supports audio input.
+
+        When enable_multimodal=True, this LLM can accept audio input directly
+        and bypass the STT pipeline while maintaining all existing functionality.
+        """
+        super().__init__(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            store=store,
+            metadata=metadata,
+            max_completion_tokens=max_completion_tokens,
+            timeout=timeout,
+            _provider_fmt=_provider_fmt,
+            service_tier=service_tier,
+        )
+        self._enable_multimodal = enable_multimodal
+
+    @property
+    def enable_multimodal(self) -> bool:
+        return self._enable_multimodal
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[FunctionTool | RawFunctionTool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        response_format: NotGivenOr[
+            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
+        ] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        audio_data: NotGivenOr[bytes] = NOT_GIVEN,
+    ) -> LLMStream:
+        """
+        Enhanced chat method that supports audio input when enable_multimodal=True.
+
+        Args:
+            audio_data: Raw audio bytes to include in the chat context when multimodal is enabled
+        """
+        if self._enable_multimodal and is_given(audio_data):
+            import base64
+            from livekit import rtc
+
+            modified_ctx = chat_ctx.copy()
+
+            audio_frames = []
+            audio_content = llm.AudioContent(frame=audio_frames)
+
+            if modified_ctx.items:
+                last_item = modified_ctx.items[-1]
+                if (
+                    last_item.type == "message"
+                    and last_item.role == "user"
+                ):
+                    if isinstance(last_item.content, str):
+                        last_item.content = [last_item.content, audio_content]
+                    elif isinstance(last_item.content, list):
+                        last_item.content.append(audio_content)
+                else:
+                    modified_ctx.add_message(
+                        role="user",
+                        content=[audio_content]
+                    )
+            else:
+                modified_ctx.add_message(
+                    role="user",
+                    content=[audio_content]
+                )
+
+            chat_ctx = modified_ctx
+
+        return super().chat(
+            chat_ctx=chat_ctx,
+            tools=tools,
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
 class LLMStream(llm.LLMStream):
     def __init__(
         self,
